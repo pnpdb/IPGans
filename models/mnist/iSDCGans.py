@@ -115,7 +115,7 @@ class IDCGans:
         # calculate mean and covariance statistics
         mu1, sigma1 = act1.mean(axis=0), cov(act1, rowvar=False)
         mu2, sigma2 = act2.mean(axis=0), cov(act2, rowvar=False)
-        # calculate sum squared difference between means
+        # calculate summary squared difference between means
         ssdiff = np.sum((mu1 - mu2) ** 2.0)
         # calculate sqrt of product between cov
         covmean = sqrtm(sigma1.dot(sigma2))
@@ -277,3 +277,13 @@ class IDCGans:
             self.save_losses()
             self.checkpoint(epoch)
             print('epoch: %d done' % epoch)
+
+    def visualize(self):
+        from summary.visualize import visualization
+        (train_images, train_labels), (_, _) = tf.keras.datasets.fashion_mnist.load_data()
+        train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
+        train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
+        real_data = train_images[:3000]
+        noise = tf.random.normal([3000, self.noise_dim])
+        fake_data = self.generator(noise, training=True)
+        visualization(real_data, fake_data)
