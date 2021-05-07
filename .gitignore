@@ -1,7 +1,9 @@
+.idea
 *.jpg
 *.png
 *.txt
 *.csv
+*.pyc
 ckpt/
 .DS_Store
 __pycache__/

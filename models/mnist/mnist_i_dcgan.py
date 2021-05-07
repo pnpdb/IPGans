@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from numpy import cov
 from numpy import iscomplexobj
@@ -9,14 +10,17 @@ import matplotlib.pyplot as plt
 from models import config
 
 
-class SDCGans:
+class MNISTIDCGans:
     def __init__(self, noise_dim=100, epochs=100, start=0):
         print("Creating DCGan Model for MNIST...")
         self.noise_dim = noise_dim
         self.epochs = epochs
         self.start = start
-        self.BUFFER_SIZE = 60000
-        self.BATCH_SIZE = 256
+        self.BUFFER_SIZE_POS = 40000
+        self.BUFFER_SIZE_NEG = 20000
+        self.BATCH_SIZE_POS = 256
+        self.BATCH_SIZE_NEG = 64
+        self.BATCH_SIZE_FAKE = 128
         self.num_exm_images = 16
         self.noise_mean = 0
         self.noise_stddev = 1.0
@@ -31,8 +35,8 @@ class SDCGans:
         self.discriminator = self.make_discriminator_model()
         self.g_checkpoint = tf.train.Checkpoint(myModel=self.generator)
         self.d_checkpoint = tf.train.Checkpoint(myModel=self.discriminator)
-        self.ck_g_manager = tf.train.CheckpointManager(self.g_checkpoint, directory=config.DCGAN_S_MNIST_CHECKPOINT_G_PATH, checkpoint_name='model.ckpt', max_to_keep=3)
-        self.ck_d_manager = tf.train.CheckpointManager(self.d_checkpoint, directory=config.DCGAN_S_MNIST_CHECKPOINT_D_PATH, checkpoint_name='model.ckpt', max_to_keep=3)
+        self.ck_g_manager = tf.train.CheckpointManager(self.g_checkpoint, directory=config.DCGAN_I_MNIST_CHECKPOINT_G_PATH, checkpoint_name='model.ckpt', max_to_keep=3)
+        self.ck_d_manager = tf.train.CheckpointManager(self.d_checkpoint, directory=config.DCGAN_I_MNIST_CHECKPOINT_D_PATH, checkpoint_name='model.ckpt', max_to_keep=3)
         self.fid_scores = []
         self.losses = []
         self.restore_model()
@@ -174,7 +178,7 @@ class SDCGans:
                     act1 = act1
                     act2 = act2
             avg_fid_score = fid_sum / count / fid_batch_size
-            self.fid_scores.append(str(epoch) + ',' + str(avg_fid_score))
+            self.fid_scores.append(str(epoch) + ',' + str(avg_fid_score.numpy()))
             print("epoch: %d fid: %f" % (epoch, avg_fid_score))
 
     def generate_and_save_images(self, epoch):
@@ -187,13 +191,13 @@ class SDCGans:
             plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
             plt.axis('off')
 
-        plt.savefig(config.DCGAN_S_MNIST_IMAGE_FORMAT.format(epoch))
+        plt.savefig(config.DCGAN_I_MNIST_IMAGE_FORMAT.format(epoch))
         plt.show()
 
     def save_fid_scores(self):
         with open(config.DCGAN_I_MNIST_FID_FILE, 'w') as f:
             for i in self.fid_scores:
-                f.write(str(i.numpy()) + '\n')
+                f.write(str(i) + '\n')
 
     def save_losses(self):
         with open(config.DCGAN_I_MNIST_LOSS_FILE, 'w') as f:
@@ -201,28 +205,44 @@ class SDCGans:
                 f.write(str(i) + '\n')
 
     def checkpoint(self, epoch):
-        # self.g_checkpoint.save(config.DCGAN_MNIST_CHECKPOINT_G_PATH + '/model.ckpt')
-        # self.d_checkpoint.save(config.DCGAN_MNIST_CHECKPOINT_D_PATH + '/model.ckpt')
         self.ck_g_manager.save(checkpoint_number=epoch)
         self.ck_d_manager.save(checkpoint_number=epoch)
 
     def restore_model(self):
-        self.g_checkpoint.restore(tf.train.latest_checkpoint(config.DCGAN_S_MNIST_CHECKPOINT_G_PATH))
-        self.d_checkpoint.restore(tf.train.latest_checkpoint(config.DCGAN_S_MNIST_CHECKPOINT_D_PATH))
+        self.g_checkpoint.restore(tf.train.latest_checkpoint(config.DCGAN_I_MNIST_CHECKPOINT_G_PATH))
+        self.d_checkpoint.restore(tf.train.latest_checkpoint(config.DCGAN_I_MNIST_CHECKPOINT_D_PATH))
         print('Restore model from checkpoint......')
 
     @tf.function
-    def train_step(self, images):
-        noise = tf.random.normal([self.BATCH_SIZE, self.noise_dim])
+    def train_step(self, images_pos, images_neg):
+        noise = tf.random.normal([self.BATCH_SIZE_FAKE, self.noise_dim])
+
+        # print(type(noise))
+        # print(type(images_neg))
+        #
+        # print(len(images_neg))
+        # print(len(images_neg))
+
+        # print(tf.shape(noise))
+        # print(tf.shape(images_neg))
+        # print(tf.shape(images_pos))
+        #
+        # print('++++')
+        # ss = tf.concat([noise, images_neg], axis=0)
+        # print(len(ss))
+        # print('++++')
 
         with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
             generated_images = self.generator(noise, training=True)
+            real_output_pos = self.discriminator(images_pos, training=True)  # 256
+            real_output_neg = self.discriminator(images_neg, training=True)  # 128
+            fake_output = self.discriminator(generated_images, training=True)  # 128
 
-            real_output = self.discriminator(images, training=True)
-            fake_output = self.discriminator(generated_images, training=True)
+            # concate the fake output and neg outpout
+            fake_output = tf.concat([fake_output, real_output_neg], axis=0)
 
             gen_loss = self.generator_loss(fake_output)
-            disc_loss = self.discriminator_loss(real_output, fake_output)
+            disc_loss = self.discriminator_loss(real_output_pos, fake_output)
 
         gradients_of_generator = gen_tape.gradient(gen_loss, self.generator.trainable_variables)
         gradients_of_discriminator = disc_tape.gradient(disc_loss, self.discriminator.trainable_variables)
@@ -235,16 +255,18 @@ class SDCGans:
     def train(self):
         (train_images, train_labels), (_, _) = tf.keras.datasets.fashion_mnist.load_data()
         train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
-
-        train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
+        train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1] 60000
+        train_images_pos = train_images[:200]
+        train_images_neg = train_images[200:]
 
         # Batch and shuffle the data
-        train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(self.BUFFER_SIZE).batch(self.BATCH_SIZE)
+        train_dataset_pos = tf.data.Dataset.from_tensor_slices(train_images_pos).shuffle(self.BUFFER_SIZE_POS).batch(self.BATCH_SIZE_POS)
+        train_dataset_neg = tf.data.Dataset.from_tensor_slices(train_images_neg).shuffle(self.BUFFER_SIZE_NEG).batch(self.BATCH_SIZE_NEG)
 
         for epoch in range(self.start, self.epochs, 1):
             gl, dl = .0, .0
-            for i, image_batch in enumerate(train_dataset):
-                g, d = self.train_step(image_batch)
+            for i, (image_batch_pos, image_batch_neg) in enumerate(zip(train_dataset_pos, train_dataset_neg)):
+                g, d = self.train_step(image_batch_pos, image_batch_neg)
                 gl, dl = g.numpy(), d.numpy()
                 print("epoch: %d, batch: %d, gen_loss: %f, disc_loss: %f" % (epoch, i, g.numpy(), d.numpy()))
 
@@ -255,3 +277,15 @@ class SDCGans:
             self.save_losses()
             self.checkpoint(epoch)
             print('epoch: %d done' % epoch)
+
+    def visualize(self):
+        from summary.visualize import visualization
+        (train_images, train_labels), (_, _) = tf.keras.datasets.fashion_mnist.load_data()
+        train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
+        train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
+        np.random.shuffle(train_images)
+        real_data = train_images[:3000]
+        noise = tf.random.normal([3000, self.noise_dim])
+        fake_data = self.generator(noise, training=True)
+
+        visualization(real_data, fake_data)

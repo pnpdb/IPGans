@@ -6,20 +6,17 @@ from scipy.linalg import sqrtm
 import tensorflow as tf
 from tensorflow.keras import layers
 import matplotlib.pyplot as plt
-from models.celeba import gen_func_celeba
-from models.celeba import dataset_celeba
 from models import config
 
 
-class IDCGans:
-    def __init__(self, noise_dim=100, output_size=64, epochs=100, start=0):
+class MNISTSDCGans:
+    def __init__(self, noise_dim=100, epochs=100, start=0):
         print("Creating DCGan Model for MNIST...")
         self.noise_dim = noise_dim
-        self.output_size = output_size
         self.epochs = epochs
         self.start = start
-        self.BUFFER_SIZE = 1024
-        self.BATCH_SIZE = 128
+        self.BUFFER_SIZE = 60000
+        self.BATCH_SIZE = 256
         self.num_exm_images = 16
         self.noise_mean = 0
         self.noise_stddev = 1.0
@@ -38,56 +35,64 @@ class IDCGans:
         self.ck_d_manager = tf.train.CheckpointManager(self.d_checkpoint, directory=config.DCGAN_S_MNIST_CHECKPOINT_D_PATH, checkpoint_name='model.ckpt', max_to_keep=3)
         self.fid_scores = []
         self.losses = []
-        # self.restore_model()
+        self.restore_model()
 
     def make_generator_model(self):
-        inputs = tf.keras.Input(shape=(self.noise_dim,))
+        model = tf.keras.Sequential()
+        model.add(layers.Dense(7 * 7 * 256, use_bias=False, input_shape=(100,), kernel_initializer=self.initializer))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
 
-        dec1 = tf.keras.layers.Dense(int(self.output_size / 16) * int(self.output_size / 16) * 1024, kernel_initializer=self.initializer, use_bias=False)(inputs)
-        dec1 = tf.keras.layers.LeakyReLU()(dec1)
+        # reshape
+        model.add(layers.Reshape((7, 7, 256)))
+        assert model.output_shape == (None, 7, 7, 256)
 
-        un_flat = tf.keras.layers.Reshape([int(self.output_size / 16), int(self.output_size / 16), 1024])(dec1)  # 4x4x1024
+        model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding='same', use_bias=False, kernel_initializer=self.initializer))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
+        assert model.output_shape == (None, 7, 7, 128)
 
-        deconv1 = tf.keras.layers.Conv2DTranspose(512, (5, 5), strides=(2, 2), padding='same', use_bias=False, kernel_initializer=self.initializer)(un_flat)  # 8x8x512 , New is 512
-        deconv1 = tf.keras.layers.BatchNormalization()(deconv1)
-        deconv1 = tf.keras.layers.LeakyReLU()(deconv1)
+        model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False, kernel_initializer=self.initializer))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
+        assert model.output_shape == (None, 14, 14, 64)
 
-        deconv2 = tf.keras.layers.Conv2DTranspose(256, (5, 5), strides=(2, 2), padding='same', use_bias=False, kernel_initializer=self.initializer)(
-            deconv1)  # 16x16x256 , New is 512
-        deconv2 = tf.keras.layers.BatchNormalization()(deconv2)
-        deconv2 = tf.keras.layers.LeakyReLU()(deconv2)
+        model.add(layers.Conv2DTranspose(32, (5, 5), strides=(1, 1), padding='same', use_bias=False, kernel_initializer=self.initializer))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
+        assert model.output_shape == (None, 14, 14, 32)
 
-        deconv4 = tf.keras.layers.Conv2DTranspose(128, (5, 5), strides=(2, 2), padding='same', use_bias=False, kernel_initializer=self.initializer)(
-            deconv2)  # 32x32x128 , New is 1024
-        deconv4 = tf.keras.layers.BatchNormalization()(deconv4)
-        deconv4 = tf.keras.layers.LeakyReLU()(deconv4)
+        model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding='same', use_bias=False, kernel_initializer=self.initializer))
+        model.add(layers.BatchNormalization())
+        model.add(layers.LeakyReLU())
+        assert model.output_shape == (None, 28, 28, 1)
 
-        out = tf.keras.layers.Conv2DTranspose(3, (5, 5), strides=(2, 2), padding='same', use_bias=False, kernel_initializer=self.initializer, activation='sigmoid')(
-            deconv4)  # 64x64x3
+        model.add(layers.Conv2DTranspose(1, (5, 5), strides=(1, 1), padding='same', use_bias=False, kernel_initializer=self.initializer))
+        model.add(layers.Activation(activation='tanh'))
+        assert model.output_shape == (None, 28, 28, 1)
 
-        model = tf.keras.Model(inputs=inputs, outputs=out)
         return model
 
     def make_discriminator_model(self):
-        model = tf.keras.Sequential()  # 64x64x3
-        model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same', kernel_initializer=self.initializer, input_shape=[self.output_size, self.output_size, 3]))  # 32x32x64
-        model.add(layers.BatchNormalization())
+        model = tf.keras.Sequential()
+        model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same', input_shape=[28, 28, 1], kernel_initializer=self.initializer))
+        model.add(layers.LeakyReLU())
+        # model.add(layers.Dropout(0.3))
+
+        model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same', kernel_initializer=self.initializer))
+        model.add(layers.LeakyReLU())
+        # model.add(layers.Dropout(0.3))
+
+        model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same', kernel_initializer=self.initializer))
+        model.add(layers.LeakyReLU())
+        # model.add(layers.Dropout(0.3))
+
+        model.add(layers.Flatten())
+
+        model.add(layers.Dense(50))
         model.add(layers.LeakyReLU())
 
-        model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same', kernel_initializer=self.initializer))  # 16x16x128
-        model.add(layers.BatchNormalization())
-        model.add(layers.LeakyReLU())
-
-        model.add(layers.Conv2D(256, (5, 5), strides=(2, 2), padding='same', kernel_initializer=self.initializer))  # 8x8x256
-        model.add(layers.BatchNormalization())
-        model.add(layers.LeakyReLU())
-
-        model.add(layers.Conv2D(512, (5, 5), strides=(2, 2), padding='same', kernel_initializer=self.initializer))  # 4x4x512
-        model.add(layers.BatchNormalization())
-        model.add(layers.LeakyReLU())
-
-        model.add(layers.Flatten())  # 8192x1
-        model.add(layers.Dense(1))  # 1x1
+        model.add(layers.Dense(1))
 
         return model
 
@@ -122,19 +127,11 @@ class IDCGans:
         self.fid_model = tf.keras.applications.inception_v3.InceptionV3(include_top=False, pooling='avg', weights='imagenet',
                                                                         input_tensor=None, input_shape=(80, 80, 3), classes=1000)
 
-    def celeba_fid_score(self, epoch, fid_train_images_names):
-        def data_reader_faces(filename):
-            with tf.device('/CPU'):
-                print(tf.cast(filename[0], dtype=tf.string))
-                image_string = tf.io.read_file(tf.cast(filename[0], dtype=tf.string))
-                # Don't use tf.image.decode_image, or the output shape will be undefined
-                image = tf.image.decode_jpeg(image_string, channels=3)
-                image.set_shape([218, 178, 3])
-                image = tf.image.crop_to_bounding_box(image, 38, 18, 140, 140)
+    def mnist_fid_score(self, epoch, fid_train_images):
+        def data_preprocess(image):
+            with tf.device(config.DEVICE):
                 image = tf.image.resize(image, [80, 80])
-                # This will convert to float values in [0, 1]
-                image = tf.subtract(image, 127.5)
-                image = tf.divide(image, 127.5)
+                image = tf.image.grayscale_to_rgb(image)
             return image
 
         self.load_fid_model()
@@ -143,51 +140,51 @@ class IDCGans:
         fid_batch_size = tf.constant(100, dtype='int64')
         num_parallel_calls = 4
 
-        random_points = tf.keras.backend.random_uniform([min(fid_train_images_names.shape[0], fid_num_samples)], minval=0, maxval=int(fid_train_images_names.shape[0]),
-                                                        dtype='int32',
-                                                        seed=None)
+        random_points = tf.keras.backend.random_uniform([min(fid_train_images.shape[0], fid_num_samples)], minval=0, maxval=int(fid_train_images.shape[0]),
+                                                        dtype='int32', seed=None)  # (1000,)
 
-        fid_train_images_names_pos = fid_train_images_names[random_points]
+        fid_train_images = fid_train_images[random_points]  # (1000, 28, 28, 1)
 
-        fid_image_dataset = tf.data.Dataset.from_tensor_slices(fid_train_images_names_pos)
-        fid_image_dataset = fid_image_dataset.map(data_reader_faces, num_parallel_calls=int(num_parallel_calls))
-        fid_image_dataset = fid_image_dataset.batch(fid_batch_size)
+        fid_image_dataset_pos = tf.data.Dataset.from_tensor_slices(fid_train_images)
+        fid_image_dataset_pos = fid_image_dataset_pos.map(data_preprocess, num_parallel_calls=int(num_parallel_calls))
+        fid_image_dataset_pos = fid_image_dataset_pos.batch(fid_batch_size)
 
         with tf.device(config.DEVICE):
             count = 0
             fid_sum = 0
-            for image_batch in fid_image_dataset:
+            for image_batch in zip(fid_image_dataset_pos):  # image_batch: (100, 80, 80, 3)
+                # noise = tf.random.normal([image_batch.shape[0], noise_dim])
                 noise = tf.random.normal([fid_batch_size, self.noise_dim], self.noise_mean, self.noise_stddev)
+                # preds = self.generator(noise, training=False)
                 preds = self.generator(noise, training=False)
                 preds = tf.image.resize(preds, [80, 80])
-                preds = tf.scalar_mul(2., preds)
-                preds = tf.subtract(preds, 1.0)
+                preds = tf.image.grayscale_to_rgb(preds)
                 preds = preds.numpy()
 
                 act1 = self.fid_model.predict(image_batch)
                 act2 = self.fid_model.predict(preds)
+
                 try:
-                    act1 = np.concatenate((act1, act1), axis=0)
-                    act2 = np.concatenate((act2, act2), axis=0)
+                    act1 = np.concatenate([act1, act1], axis=0)
+                    act2 = np.concatenate([act2, act2], axis=0)
                     fid_score = self.calculate_fid(act1, act2)
                     fid_sum += fid_score
                     count += 1
                 except:
                     act1 = act1
                     act2 = act2
-
             avg_fid_score = fid_sum / count / fid_batch_size
-            self.fid_scores.append(str(epoch) + ',' + str(np.array(avg_fid_score)))
+            self.fid_scores.append(str(epoch) + ',' + str(avg_fid_score))
             print("epoch: %d fid: %f" % (epoch, avg_fid_score))
 
     def generate_and_save_images(self, epoch):
+        # 注意 training` 设定为 False
+        # 因此，所有层都在推理模式下运行（batchnorm）
         predictions = self.generator(self.seed, training=False)
-        # predictions = tf.multiply(predictions, 255.0)
-        predictions = predictions.numpy()
 
         for i in range(predictions.shape[0]):
             plt.subplot(4, 4, i + 1)
-            plt.imshow((predictions[i, :, :, :] * 255.0).astype(np.uint8))
+            plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
             plt.axis('off')
 
         plt.savefig(config.DCGAN_S_MNIST_IMAGE_FORMAT.format(epoch))
@@ -196,7 +193,7 @@ class IDCGans:
     def save_fid_scores(self):
         with open(config.DCGAN_I_MNIST_FID_FILE, 'w') as f:
             for i in self.fid_scores:
-                f.write(str(i) + '\n')
+                f.write(str(i.numpy()) + '\n')
 
     def save_losses(self):
         with open(config.DCGAN_I_MNIST_LOSS_FILE, 'w') as f:
@@ -215,20 +212,17 @@ class IDCGans:
         print('Restore model from checkpoint......')
 
     @tf.function
-    def train_step(self, images_pos, images_neg):
-        noise = tf.random.normal([self.BATCH_SIZE / 2, self.noise_dim])  # 64
+    def train_step(self, images):
+        noise = tf.random.normal([self.BATCH_SIZE, self.noise_dim])
 
         with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
             generated_images = self.generator(noise, training=True)
 
-            real_output_pos = self.discriminator(images_pos, training=True)
-            real_output_neg = self.discriminator(images_neg, training=True)
+            real_output = self.discriminator(images, training=True)
             fake_output = self.discriminator(generated_images, training=True)
 
-            fake_output = tf.concat([fake_output, real_output_neg], axis=0)
-
             gen_loss = self.generator_loss(fake_output)
-            disc_loss = self.discriminator_loss(real_output_pos, fake_output)
+            disc_loss = self.discriminator_loss(real_output, fake_output)
 
         gradients_of_generator = gen_tape.gradient(gen_loss, self.generator.trainable_variables)
         gradients_of_discriminator = disc_tape.gradient(disc_loss, self.discriminator.trainable_variables)
@@ -239,25 +233,37 @@ class IDCGans:
         return gen_loss, disc_loss
 
     def train(self):
-        train_images = gen_func_celeba()
-        train_images_pos = train_images[:10000]
-        train_images_neg = train_images[10000:]
+        (train_images, train_labels), (_, _) = tf.keras.datasets.fashion_mnist.load_data()
+        train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
 
-        train_dataset_pos = dataset_celeba(train_images_pos, self.BUFFER_SIZE, self.BATCH_SIZE, 64)
-        train_dataset_neg = dataset_celeba(train_images_neg, self.BUFFER_SIZE, self.BATCH_SIZE, 64)
+        train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
+
+        # Batch and shuffle the data
+        train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(self.BUFFER_SIZE).batch(self.BATCH_SIZE)
 
         for epoch in range(self.start, self.epochs, 1):
             gl, dl = .0, .0
-            # for i, image_batch in enumerate(train_dataset):
-            for i, (image_batch_pos, image_batch_neg) in enumerate(zip(train_dataset_pos, train_dataset_neg)):
-                g, d = self.train_step(image_batch_pos, image_batch_neg)
+            for i, image_batch in enumerate(train_dataset):
+                g, d = self.train_step(image_batch)
                 gl, dl = g.numpy(), d.numpy()
                 print("epoch: %d, batch: %d, gen_loss: %f, disc_loss: %f" % (epoch, i, g.numpy(), d.numpy()))
 
             self.losses.append(str(epoch) + ',' + str(gl) + ',' + str(dl))
             self.generate_and_save_images(epoch)
-            self.celeba_fid_score(epoch, train_images)
+            self.mnist_fid_score(epoch, train_images)
             self.save_fid_scores()
             self.save_losses()
             self.checkpoint(epoch)
             print('epoch: %d done' % epoch)
+
+    def visualize(self):
+        from summary.visualize import visualization
+        (train_images, train_labels), (_, _) = tf.keras.datasets.fashion_mnist.load_data()
+        train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
+        train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
+        np.random.shuffle(train_images)
+        real_data = train_images[:3000]
+        noise = tf.random.normal([3000, self.noise_dim])
+        fake_data = self.generator(noise, training=True)
+
+        visualization(real_data, fake_data)

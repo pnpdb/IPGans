@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import time
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -14,5 +15,5 @@ def visualization(real_data, fake_data):
     ax.set_zlabel('Z')
     ax.set_ylabel('Y')
     ax.set_xlabel('X')
-    plt.savefig('v.jpg')
+    plt.savefig(time.strftime("%Y-%m-%d %H:%M:%S") + '.jpg')
     plt.show()
